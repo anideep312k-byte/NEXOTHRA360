@@ -1,51 +1,28 @@
-# Secrets
 .env
 *.env
 secrets.yml
 *.pem
-
-# Database
 *.db
 *.db-shm
 *.db-wal
-
-# Backups
 *.bak
 *.before-*
-*.backup
 KAVACH360_BACKUP.py
 *.pre-*
-
-# Python
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
-
-# IDE
 .vscode/
 .idea/
-*.swp
-*.swo
-
-# OS
 .DS_Store
 Thumbs.db
-
-# Logs
 *.log
 logs/
-
-# Trash
 .waste/
 .waste2/
-
-# Binaries
 *.deb
 *.rpm
 *.exe
 *.dll
-
-# Temp
 /tmp/
 *.tmp
