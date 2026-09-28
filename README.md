@@ -140,3 +140,25 @@ Anideep — github.com/anideep312k-byte
 
 Not a clone of Wazuh, Splunk, Microsoft Sentinel, IBM QRadar,
 Elastic Security, Palo Alto Cortex XSOAR, or any other product.
+
+## Copyright & Usage
+
+© 2026 Anish (Anideep) — NEXOTHRA360
+
+This project is licensed under the **MIT License**.
+
+You are free to:
+- Use, copy, modify
+- Distribute
+
+Under the condition:
+- Attribution required — keep the copyright notice
+- License notice preserved
+
+Commercial use: allowed under MIT terms.
+
+Original author: Anish (Anideep)
+GitHub: [github.com/anideep312k-byte/NEXOTHRA360](https://github.com/anideep312k-byte/NEXOTHRA360)
+
+Not a clone of Wazuh, Splunk, Microsoft Sentinel, IBM QRadar,
+Elastic Security, Palo Alto Cortex XSOAR, or any other product.
