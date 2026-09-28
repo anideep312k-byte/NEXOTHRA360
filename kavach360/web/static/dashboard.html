@@ -1,0 +1,44 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kavach360 — Dashboard</title><link rel="stylesheet" href="/static/style.css"></head><body>
+<div class="header"><div class="logo">Kavach360</div>
+<nav class="nav">
+<a href="/static/dashboard.html" class="active">Dashboard</a>
+<a href="/static/events.html">Submit Event</a>
+<a href="#" onclick="loadRules();return false;">Rules</a>
+<a href="#" onclick="logout();return false;">Logout</a></nav></div>
+<div class="main">
+<div class="page-title"><h2>Security Operations Dashboard</h2>
+<button class="btn btn-sm" onclick="refresh();">Refresh</button></div>
+<div class="stats-grid">
+<div class="stat-card"><div class="label">Total Incidents</div><div class="value" id="statIncidents">—</div></div>
+<div class="stat-card"><div class="label">Critical</div><div class="value critical" id="statCritical">—</div></div>
+<div class="stat-card"><div class="label">High</div><div class="value high" id="statHigh">—</div></div>
+<div class="stat-card"><div class="label">Detection Rules</div><div class="value success" id="statRules">—</div></div>
+</div>
+<div class="card"><h3>Recent Incidents</h3>
+<div id="incidentsContainer"><div class="empty-state">Loading...</div></div></div>
+<div class="card" id="rulesCard" style="display:none;"><h3>Detection Rules</h3><div id="rulesContainer"></div></div>
+</div><script>
+async function api(url,opts={}){const method=(opts.method||'GET').toUpperCase();const headers={...(opts.headers||{})};
+if(!['GET','HEAD'].includes(method)){const r=await fetch('/api/v1/auth/csrf',{credentials:'same-origin'});const d=await r.json();headers['X-CSRF-TOKEN']=d.csrf_token;headers['Content-Type']='application/json';}
+return fetch(url,{...opts,method,headers,credentials:'same-origin'});}
+function sevBadge(s){s=(s||'low').toLowerCase();return '<span class="badge '+s+'">'+s+'</span>';}
+async function loadIncidents(){try{const r=await api('/api/v1/soc/incidents');
+if(r.status===401){window.location.href='/static/login.html';return;}
+const d=await r.json();const items=d.incidents||[];
+document.getElementById('statIncidents').textContent=items.length;
+document.getElementById('statCritical').textContent=items.filter(i=>i.severity==='critical').length;
+document.getElementById('statHigh').textContent=items.filter(i=>i.severity==='high').length;
+const c=document.getElementById('incidentsContainer');
+if(items.length===0){c.innerHTML='<div class="empty-state">No incidents yet. Submit an event to create detections.</div>';return;}
+c.innerHTML='<table><thead><tr><th>ID</th><th>Title</th><th>Severity</th><th>Status</th><th>Detections</th><th>Created</th></tr></thead><tbody>'+items.map(i=>'<tr><td><code style="font-size:12px;">'+i.id+'</code></td><td>'+i.title+'</td><td>'+sevBadge(i.severity)+'</td><td>'+i.status+'</td><td>'+(i.detections_count||0)+'</td><td>'+new Date(i.created_at).toLocaleString()+'</td></tr>').join('')+'</tbody></table>';}catch(e){console.error(e);}}
+async function loadRules(){try{const r=await api('/api/v1/soc/detections/rules');const d=await r.json();const items=d.rules||[];
+document.getElementById('statRules').textContent=items.length;
+document.getElementById('rulesCard').style.display='block';
+document.getElementById('rulesContainer').innerHTML='<table><thead><tr><th>Rule ID</th><th>Title</th><th>Severity</th><th>MITRE</th></tr></thead><tbody>'+items.map(r=>'<tr><td><code>'+r.id+'</code></td><td>'+r.title+'</td><td>'+sevBadge(r.severity)+'</td><td>'+(r.mitre||[]).join(', ')+'</td></tr>').join('')+'</tbody></table>';
+document.getElementById('rulesCard').scrollIntoView({behavior:'smooth'});}catch(e){console.error(e);}}
+async function logout(){await api('/api/v1/auth/logout',{method:'POST'});window.location.href='/static/login.html';}
+function refresh(){loadIncidents();}
+refresh();setInterval(loadIncidents,10000);
+</script></body></html>

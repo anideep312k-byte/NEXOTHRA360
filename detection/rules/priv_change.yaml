@@ -1,0 +1,15 @@
+id: PRIV-CHANGE-001
+title: Privilege change detected
+description: >
+  Event indicates that an actor was granted administrative privileges
+  or added to a privileged group.
+severity: high
+enabled: true
+version: 1
+tags: [authz, privilege]
+mitre:
+  techniques: [T1078]
+match:
+  kind: authz
+  field: action
+  in: [grant_admin, add_to_group]

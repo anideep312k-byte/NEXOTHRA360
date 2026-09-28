@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "n_events": 200,
+  "published": 200,
+  "errors": 0,
+  "http_429_count": 0,
+  "target_rate": 1000.0,
+  "publish_elapsed_seconds": 0.23,
+  "publish_http_latency_ms_p50": 1.123,
+  "publish_http_latency_ms_p95": 1.422,
+  "publish_http_latency_ms_p99": 1.663,
+  "publisher_throughput_eps": 862.4,
+  "drain_elapsed_seconds": 3.01,
+  "drain_detail": {
+    "events": 0,
+    "events_detect": 0,
+    "alerts_correlate": 0
+  },
+  "end_to_end_eps": 61.8,
+  "note": "Measured against the running process-mode topology; results are host-specific."
+}

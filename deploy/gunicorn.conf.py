@@ -1,0 +1,11 @@
+bind = "0.0.0.0:8080"
+workers = 4
+threads = 2
+worker_class = "gthread"
+preload_app = False
+timeout = 30
+graceful_timeout = 30
+keepalive = 5
+accesslog = "-"
+errorlog = "-"
+capture_output = True

@@ -1,0 +1,1415 @@
+<script>
+"use strict";
+
+/* ============================================================
+   Utilities
+   ============================================================ */
+const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+function el(tag, attrs, children) {
+  const e = document.createElement(tag);
+  if (attrs) for (const k in attrs) {
+    if (k === "class") e.className = attrs[k];
+    else if (k === "text") e.textContent = attrs[k];
+    else if (k.startsWith("on") && typeof attrs[k] === "function")
+      e.addEventListener(k.slice(2), attrs[k]);
+    else if (attrs[k] !== null && attrs[k] !== undefined)
+      e.setAttribute(k, attrs[k]);
+  }
+  if (children) for (const c of [].concat(children)) {
+    if (c === null || c === undefined || c === false) continue;
+    e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  }
+  return e;
+}
+function clear(n) { while (n && n.firstChild) n.removeChild(n.firstChild); }
+function fmtTime(s) {
+  if (!s) return "—";
+  try { return new Date(s).toLocaleString(); } catch (e) { return s; }
+}
+function fmtShort(s) {
+  if (!s) return "—";
+  try { return new Date(s).toLocaleTimeString(); } catch (e) { return s; }
+}
+function esc(s) { return s === null || s === undefined ? "" : String(s); }
+function num(n) { return (n === null || n === undefined) ? 0 : n; }
+
+function toast(msg, kind) {
+  const t = $("#toast");
+  t.className = "toast show" + (kind === "err" ? " err" : kind === "ok" ? " ok" : "");
+  t.textContent = msg;
+  clearTimeout(toast._h);
+  toast._h = setTimeout(() => t.classList.remove("show"), 4000);
+}
+
+function chip(text, val) {
+  const cls = "chip " + String(val || "").toLowerCase().replace(/[^a-z_]/g, "");
+  return el("span", { class: cls, text: text || "—" });
+}
+
+/* ============================================================
+   Session — stored in localStorage, validated against /v1/me
+   ============================================================ */
+const session = {
+  token: null, tenant: null, role: null, username: null, userId: null,
+  get isAuthed() { return !!this.token; },
+  save() {
+    try {
+      localStorage.setItem("k360", JSON.stringify({
+        token: this.token, tenant: this.tenant, role: this.role,
+        username: this.username, userId: this.userId, ts: Date.now()
+      }));
+    } catch (e) {}
+  },
+  load() {
+    try {
+      const raw = localStorage.getItem("k360");
+      if (!raw) return false;
+      const s = JSON.parse(raw);
+      if (!s.token || (Date.now() - (s.ts || 0)) > 3600 * 1000) return false;
+      Object.assign(this, s);
+      return true;
+    } catch (e) { return false; }
+  },
+  clear() {
+    this.token = this.tenant = this.role = this.username = this.userId = null;
+    try { localStorage.removeItem("k360"); } catch (e) {}
+  }
+};
+
+/* ============================================================
+   API client
+   ============================================================ */
+let _pwModalOpen = false;
+
+async function api(path, opts) {
+  opts = opts || {};
+  const headers = Object.assign({}, opts.headers || {});
+  if (session.token) headers["Authorization"] = "Bearer " + session.token;
+  if (opts.body && !headers["Content-Type"])
+    headers["Content-Type"] = "application/json";
+  let resp;
+  try {
+    resp = await fetch(path, Object.assign({}, opts, { headers: headers }));
+  } catch (e) {
+    throw new Error("Network error: " + e.message);
+  }
+  let data = null;
+  try { data = await resp.json(); } catch (e) { data = null; }
+  if (resp.status === 401) {
+    session.clear();
+    showLogin();
+    throw new Error("Session expired, please sign in");
+  }
+  if (resp.status === 403 && data && data.code === "PASSWORD_CHANGE_REQUIRED") {
+    if (!_pwModalOpen) openPasswordModal(true);
+    throw new Error("password change required");
+  }
+  if (!resp.ok) {
+    const msg = (data && (data.error || data.detail)) || ("HTTP " + resp.status);
+    throw new Error(msg);
+  }
+  return data;
+}
+
+/* ============================================================
+   Login / logout / password change
+   ============================================================ */
+function showLogin() {
+  $("#app").classList.add("hidden");
+  $("#loginView").classList.remove("hidden");
+  closeModal();
+  $("#loginErr").textContent = "";
+  $("#liUser").focus();
+}
+
+function showApp() {
+  $("#loginView").classList.add("hidden");
+  $("#app").classList.remove("hidden");
+  $("#hdrTenant").textContent = "tenant: " + session.tenant;
+  $("#hdrUser").textContent = session.username || "—";
+  $("#hdrRole").textContent = session.role || "—";
+  $("#hdrAvatar").textContent = (session.username || "?").slice(0, 1).toUpperCase();
+  renderSidebar();
+  navigate(location.hash.slice(1) || "dashboard");
+}
+
+async function doLogin(ev) {
+  if (ev) ev.preventDefault();
+  const btn = $("#loginBtn"), err = $("#loginErr");
+  err.textContent = "";
+  const t = $("#liTenant").value.trim();
+  const u = $("#liUser").value.trim();
+  const p = $("#liPass").value;
+  const m = $("#liMfa").value.trim();
+  if (!t || !u || !p) {
+    err.textContent = "Please fill in tenant, username and password.";
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = "Signing in…";
+  try {
+    const body = { tenant_id: t, username: u, password: p };
+    if (m) body.mfa_code = m;
+    const r = await fetch("/v1/auth/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const data = await r.json().catch(() => null);
+    if (!r.ok || !data || !data.token) {
+      err.textContent = (data && data.error) || ("Login failed (HTTP " + r.status + ")");
+      return;
+    }
+    session.token = data.token;
+    session.userId = data.user_id;
+    session.role = data.role;
+    session.tenant = data.tenant_id;
+    session.username = u;
+    session.save();
+    try { await api("/v1/me"); }
+    catch (e) { session.clear(); err.textContent = "Login verification failed"; return; }
+    if (data.must_change_password) {
+      showApp();
+      openPasswordModal(true);
+      return;
+    }
+    showApp();
+  } catch (e) {
+    err.textContent = e.message || "Login error";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Sign in";
+  }
+}
+
+function openPasswordModal(forced) {
+  _pwModalOpen = true;
+  const body = el("div", { class: "stack" }, [
+    forced ? el("p", { class: "muted",
+      text: "Your administrator requires a password change before you continue. " +
+            "All other API calls are blocked until you do." }) : null,
+    el("label", { text: "Current password" }),
+    el("input", { id: "pwCur", type: "password", autocomplete: "current-password" }),
+    el("label", { text: "New password (min 12 characters)" }),
+    el("input", { id: "pwNew", type: "password", autocomplete: "new-password" }),
+    el("label", { text: "Confirm new password" }),
+    el("input", { id: "pwNew2", type: "password", autocomplete: "new-password" }),
+    el("div", { class: "err-msg", id: "pwErr" })
+  ]);
+  const footer = el("div", { class: "row" }, [
+    !forced ? el("button", { class: "ghost", text: "Cancel",
+      onclick: () => { _pwModalOpen = false; closeModal(); } }) : null,
+    el("button", { class: "primary", text: "Change password",
+      onclick: doChangePassword })
+  ]);
+  openModal(forced ? "Password change required" : "Change password", body, footer);
+}
+
+async function doChangePassword() {
+  const cur = $("#pwCur").value, nw = $("#pwNew").value, nw2 = $("#pwNew2").value;
+  const err = $("#pwErr");
+  err.textContent = "";
+  if (!cur || !nw) { err.textContent = "Fill in both fields."; return; }
+  if (nw !== nw2) { err.textContent = "New passwords do not match."; return; }
+  if (nw.length < 12) {
+    err.textContent = "New password must be at least 12 characters."; return;
+  }
+  try {
+    await api("/v1/auth/change_password", {
+      method: "POST",
+      body: JSON.stringify({ current_password: cur, new_password: nw })
+    });
+    toast("Password changed. Please sign in again.", "ok");
+    _pwModalOpen = false;
+    session.clear();
+    showLogin();
+  } catch (e) { err.textContent = e.message; }
+}
+
+/* ============================================================
+   Sidebar + Router
+   ============================================================ */
+const ROUTES = [
+  { id: "dashboard",   label: "Overview",         group: "Overview",  render: renderDashboard },
+  { id: "alerts",      label: "Alerts",           group: "Operations", render: renderAlerts },
+  { id: "incidents",   label: "Incidents",        group: "Operations", render: renderIncidents },
+  { id: "cases",       label: "Cases",            group: "Operations", render: renderCases },
+  { id: "events",      label: "Events",           group: "Operations", render: renderEvents },
+  { id: "entities",    label: "UEBA / Entities",  group: "Operations", render: renderEntities },
+  { id: "iocs",        label: "IOC Intelligence", group: "Threat Intel", render: renderIOCs },
+  { id: "detections",  label: "Detection Rules",  group: "Threat Intel", render: renderDetections },
+  { id: "hunting",     label: "Threat Hunting",   group: "Threat Intel", render: renderHunting },
+  { id: "soar",        label: "SOAR",             group: "Response",   render: renderSOAR },
+  { id: "ai",          label: "AI Assistant",     group: "Response",   render: renderAI },
+  { id: "audit",       label: "Audit Log",        group: "Governance", render: renderAudit },
+  { id: "users",       label: "Users",            group: "Governance", render: renderUsers },
+  { id: "settings",    label: "System Health",    group: "Governance", render: renderSettings }
+];
+
+function renderSidebar() {
+  const sb = $("#sidebar");
+  clear(sb);
+  const groups = {};
+  for (const r of ROUTES) (groups[r.group] = groups[r.group] || []).push(r);
+  for (const g of Object.keys(groups)) {
+    sb.appendChild(el("div", { class: "nav-section", text: g }));
+    for (const r of groups[g]) {
+      sb.appendChild(el("div", {
+        class: "nav-item" + (location.hash.slice(1) === r.id ? " active" : ""),
+        "data-route": r.id,
+        onclick: () => navigate(r.id)
+      }, [
+        el("span", { text: "•", style: "opacity:.55" }),
+        el("span", { class: "lbl", text: r.label })
+      ]));
+    }
+  }
+}
+
+function navigate(id) {
+  const route = ROUTES.find(r => r.id === id) || ROUTES[0];
+  if (location.hash.slice(1) !== route.id) location.hash = route.id;
+  $$("aside .nav-item").forEach(n =>
+    n.classList.toggle("active", n.dataset.route === route.id));
+  const main = $("#main");
+  clear(main);
+  main.appendChild(el("div", { class: "empty" },
+    [el("span", { class: "spinner" }), " Loading…"]));
+  Promise.resolve().then(() => route.render(main)).catch(e => {
+    clear(main);
+    main.appendChild(el("div", { class: "empty", text: "Error: " + e.message }));
+    toast(e.message, "err");
+  });
+}
+window.addEventListener("hashchange",
+  () => navigate(location.hash.slice(1) || "dashboard"));
+
+/* ============================================================
+   Modal
+   ============================================================ */
+function openModal(title, bodyNode, footerNode) {
+  $("#modalTitle").textContent = title;
+  const b = $("#modalBody");
+  clear(b);
+  b.appendChild(bodyNode);
+  const f = $("#modalFooter");
+  clear(f);
+  if (footerNode) { f.classList.remove("hidden"); f.appendChild(footerNode); }
+  else f.classList.add("hidden");
+  $("#modalBackdrop").classList.add("show");
+}
+function closeModal() {
+  $("#modalBackdrop").classList.remove("show");
+  _pwModalOpen = false;
+}
+
+/* ============================================================
+   Tables
+   ============================================================ */
+function tableOrEmpty(rows, cols, onRow, emptyMsg) {
+  if (!rows || rows.length === 0)
+    return el("div", { class: "empty", text: emptyMsg || "No records." });
+  const thead = el("thead", {}, [el("tr", {}, cols.map(c => el("th", { text: c.l })))]);
+  const tbody = el("tbody", {}, rows.map(r => {
+    const tr = el("tr", {},
+      cols.map(c => el("td", {}, c.f ? c.f(r[c.k], r) : el("span", { text: esc(r[c.k]) }))));
+    if (onRow) tr.addEventListener("click", () => onRow(r));
+    return tr;
+  }));
+  return el("table", {}, [thead, tbody]);
+}
+
+function filterInput(ph, onI) {
+  const i = el("input", { placeholder: ph });
+  i.addEventListener("input", () => onI(i.value.trim()));
+  return el("div", {}, [el("label", { text: ph }), i]);
+}
+function filterSelect(label, opts, onC) {
+  const s = el("select", {}, opts.map(o =>
+    el("option", { value: o, text: o || ("All " + label) })));
+  s.addEventListener("change", () => onC(s.value));
+  return el("div", {}, [el("label", { text: label }), s]);
+}
+function pager(offset, limit, count, onPrev, onNext) {
+  const p = el("div", { class: "pager" });
+  p.appendChild(el("button", { text: "Prev", disabled: offset === 0,
+    onclick: onPrev }));
+  p.appendChild(el("span", { class: "muted",
+    text: `offset ${offset}, ${count} rows` }));
+  p.appendChild(el("button", { text: "Next", disabled: count < limit,
+    onclick: onNext }));
+  return p;
+}
+
+/* ============================================================
+   Overview / Dashboard
+   ============================================================ */
+async function renderDashboard(main) {
+  const [d, alerts, incidents, health] = await Promise.all([
+    api("/v1/dashboard?tenant_id=" + encodeURIComponent(session.tenant)),
+    api("/v1/alerts?tenant_id=" + encodeURIComponent(session.tenant) + "&limit=8"),
+    api("/v1/incidents?tenant_id=" + encodeURIComponent(session.tenant) + "&limit=8"),
+    api("/v1/health")
+  ]);
+
+  const kpi = (label, val) => el("div", { class: "panel kpi" }, [
+    el("div", { class: "v", text: String(val) }),
+    el("div", { class: "l", text: label })
+  ]);
+
+  const wrap = el("div", { class: "stack" }, [
+    el("div", { class: "row between" }, [
+      el("h1", { text: "Security Overview" }),
+      el("div", { class: "row" }, [
+        el("span", { class: "muted", text: "tenant: " + session.tenant }),
+        el("button", { text: "Refresh", onclick: () => renderDashboard(main) })
+      ])
+    ]),
+    el("div", { class: "grid cols-4" }, [
+      kpi("Alerts", num(d.alerts)),
+      kpi("Incidents", num(d.incidents)),
+      kpi("Cases", num(d.cases)),
+      kpi("IOCs", num(d.iocs))
+    ]),
+    el("div", { class: "grid cols-4" }, [
+      kpi("Bus queue", num(d.bus_pending)),
+      kpi("Ready", String(d.ready)),
+      kpi("Version", d.version || "?"),
+      kpi("Workers", 4)
+    ]),
+    el("div", { class: "grid cols-2" }, [
+      el("div", { class: "panel" }, [
+        el("h2", { text: "Recent alerts" }),
+        tableOrEmpty(alerts.alerts || [], [
+          { k: "severity", l: "Sev", f: v => chip(esc(v), v) },
+          { k: "title",    l: "Title" },
+          { k: "risk",     l: "Risk" },
+          { k: "status",   l: "Status", f: v => chip(esc(v), v) },
+          { k: "created_ts", l: "When", f: fmtTime }
+        ], r => openAlertDetail(r.alert_id), "No security events yet")
+      ]),
+      el("div", { class: "panel" }, [
+        el("h2", { text: "Recent incidents" }),
+        tableOrEmpty(incidents.incidents || [], [
+          { k: "severity", l: "Sev", f: v => chip(esc(v), v) },
+          { k: "title",    l: "Title" },
+          { k: "state",    l: "State", f: v => chip(esc(v), v) },
+          { k: "risk",     l: "Risk" },
+          { k: "created_ts", l: "When", f: fmtTime }
+        ], r => openIncidentDetail(r.incident_id), "No incidents yet")
+      ])
+    ]),
+    el("div", { class: "panel" }, [
+      el("h2", { text: "System health" }),
+      el("div", { class: "detail-kv" },
+        Object.entries(health.checks || {}).flatMap(([k, v]) => [
+          el("div", { class: "k", text: k }),
+          el("div", { text: String(v) })
+        ]))
+    ])
+  ]);
+
+  clear(main);
+  main.appendChild(wrap);
+}
+
+/* ============================================================
+   Alerts
+   ============================================================ */
+async function renderAlerts(main) {
+  const s = { q: "", severity: "", status: "", limit: 50, offset: 0 };
+  const wrap = el("div", { class: "stack" }, [ el("h1", { text: "Alerts" }) ]);
+  const filters = el("div", { class: "filters" });
+  filters.appendChild(filterInput("Search title/entity",
+    v => { s.q = v; s.offset = 0; load(); }));
+  filters.appendChild(filterSelect("Severity",
+    ["", "critical", "high", "medium", "low", "info"],
+    v => { s.severity = v; s.offset = 0; load(); }));
+  filters.appendChild(filterSelect("Status",
+    ["", "new", "investigating", "escalated", "resolved", "closed", "false_positive"],
+    v => { s.status = v; s.offset = 0; load(); }));
+  const list = el("div", { class: "panel" });
+  const pagerBox = el("div");
+  wrap.appendChild(el("div", { class: "row between" },
+    [filters, el("button", { text: "Refresh", onclick: () => load() })]));
+  wrap.appendChild(list);
+  wrap.appendChild(pagerBox);
+  clear(main);
+  main.appendChild(wrap);
+
+  async function load() {
+    list.innerHTML = "";
+    list.appendChild(el("div", { class: "empty" },
+      [el("span", { class: "spinner" }), " Loading…"]));
+    try {
+      const q = new URLSearchParams({
+        tenant_id: session.tenant,
+        limit: String(s.limit), offset: String(s.offset)
+      });
+      if (s.q) q.set("q", s.q);
+      if (s.severity) q.set("severity", s.severity);
+      if (s.status) q.set("status", s.status);
+      const d = await api("/v1/alerts?" + q.toString());
+      const rows = d.alerts || [];
+      clear(list);
+      if (!rows.length)
+        list.appendChild(el("div", { class: "empty", text: "No alerts match." }));
+      else
+        list.appendChild(tableOrEmpty(rows, [
+          { k: "severity", l: "Sev",    f: v => chip(esc(v), v) },
+          { k: "title",    l: "Title" },
+          { k: "entity",   l: "Entity" },
+          { k: "risk",     l: "Risk" },
+          { k: "status",   l: "Status", f: v => chip(esc(v), v) },
+          { k: "created_ts", l: "When", f: fmtTime }
+        ], r => openAlertDetail(r.alert_id)));
+      clear(pagerBox);
+      pagerBox.appendChild(pager(s.offset, s.limit, rows.length,
+        () => { s.offset = Math.max(0, s.offset - s.limit); load(); },
+        () => { s.offset += s.limit; load(); }));
+    } catch (e) {
+      clear(list);
+      list.appendChild(el("div", { class: "empty", text: "Error: " + e.message }));
+    }
+  }
+  load();
+}
+
+async function openAlertDetail(id) {
+  const a = await api("/v1/alerts/" + encodeURIComponent(id) +
+    "?tenant_id=" + encodeURIComponent(session.tenant));
+  const body = el("div", { class: "stack" }, [
+    el("div", { class: "detail-kv" }, [
+      el("div", { class: "k", text: "Alert ID" }),
+      el("div", { class: "mono", text: a.alert_id }),
+      el("div", { class: "k", text: "Title" }), el("div", { text: a.title }),
+      el("div", { class: "k", text: "Severity" }),
+      el("div", {}, [chip(esc(a.severity), a.severity)]),
+      el("div", { class: "k", text: "Status" }),
+      el("div", {}, [chip(esc(a.status), a.status)]),
+      el("div", { class: "k", text: "Risk" }), el("div", { text: String(a.risk) }),
+      el("div", { class: "k", text: "Confidence" }),
+      el("div", { text: String(a.confidence) }),
+      el("div", { class: "k", text: "Rules" }),
+      el("div", { class: "mono", text: a.rule_id }),
+      el("div", { class: "k", text: "Entity" }), el("div", { text: a.entity || "—" }),
+      el("div", { class: "k", text: "Created" }),
+      el("div", { text: fmtTime(a.created_ts) }),
+      el("div", { class: "k", text: "Description" }), el("div", { text: a.description })
+    ]),
+    el("h2", { text: "Analyst actions" }),
+    el("div", { class: "row" }, [
+      el("button", { text: "Mark investigating",
+        onclick: () => setAlertStatus(a.alert_id, "investigating") }),
+      el("button", { text: "Escalate",
+        onclick: () => setAlertStatus(a.alert_id, "escalated") }),
+      el("button", { text: "Resolve",
+        onclick: () => setAlertStatus(a.alert_id, "resolved") }),
+      el("button", { text: "False positive",
+        onclick: () => setAlertStatus(a.alert_id, "false_positive") }),
+      el("button", { class: "primary", text: "Create incident",
+        onclick: () => createIncidentFromAlert(a.alert_id) })
+    ])
+  ]);
+  openModal("Alert " + a.alert_id, body,
+    el("div", { class: "row" },
+      [el("button", { class: "ghost", text: "Close", onclick: closeModal })]));
+}
+
+async function setAlertStatus(id, st) {
+  try {
+    await api("/v1/alerts/" + encodeURIComponent(id) + "/status", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: session.tenant, status: st })
+    });
+    toast("Alert status updated", "ok");
+    closeModal();
+    navigate(location.hash.slice(1) || "alerts");
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function createIncidentFromAlert(id) {
+  try {
+    const r = await api("/v1/alerts/" + encodeURIComponent(id) +
+      "/create_incident", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: session.tenant })
+    });
+    toast("Incident created: " + r.incident_id, "ok");
+    closeModal();
+    navigate("incidents");
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/* ============================================================
+   Incidents
+   ============================================================ */
+async function renderIncidents(main) {
+  const s = { q: "", state: "", severity: "", limit: 50, offset: 0 };
+  const wrap = el("div", { class: "stack" }, [ el("h1", { text: "Incidents" }) ]);
+  const filters = el("div", { class: "filters" });
+  filters.appendChild(filterInput("Search title",
+    v => { s.q = v; s.offset = 0; load(); }));
+  filters.appendChild(filterSelect("State",
+    ["", "NEW", "TRIAGED", "INVESTIGATING", "CONTAINMENT", "ERADICATION",
+     "RECOVERY", "CLOSED"],
+    v => { s.state = v; s.offset = 0; load(); }));
+  filters.appendChild(filterSelect("Severity",
+    ["", "critical", "high", "medium", "low", "info"],
+    v => { s.severity = v; s.offset = 0; load(); }));
+  const list = el("div", { class: "panel" });
+  const pagerBox = el("div");
+  wrap.appendChild(el("div", { class: "row between" },
+    [filters, el("button", { text: "Refresh", onclick: () => load() })]));
+  wrap.appendChild(list);
+  wrap.appendChild(pagerBox);
+  clear(main);
+  main.appendChild(wrap);
+
+  async function load() {
+    list.innerHTML = "";
+    list.appendChild(el("div", { class: "empty" },
+      [el("span", { class: "spinner" }), " Loading…"]));
+    try {
+      const q = new URLSearchParams({
+        tenant_id: session.tenant,
+        limit: String(s.limit), offset: String(s.offset)
+      });
+      if (s.q) q.set("q", s.q);
+      if (s.state) q.set("state", s.state);
+      if (s.severity) q.set("severity", s.severity);
+      const d = await api("/v1/incidents?" + q.toString());
+      const rows = d.incidents || [];
+      clear(list);
+      if (!rows.length)
+        list.appendChild(el("div", { class: "empty", text: "No incidents match." }));
+      else
+        list.appendChild(tableOrEmpty(rows, [
+          { k: "state",   l: "State", f: v => chip(esc(v), v) },
+          { k: "severity", l: "Sev",  f: v => chip(esc(v), v) },
+          { k: "title",   l: "Title" },
+          { k: "risk",    l: "Risk" },
+          { k: "assignee", l: "Assignee" },
+          { k: "updated_ts", l: "Updated", f: fmtTime }
+        ], r => openIncidentDetail(r.incident_id)));
+      clear(pagerBox);
+      pagerBox.appendChild(pager(s.offset, s.limit, rows.length,
+        () => { s.offset = Math.max(0, s.offset - s.limit); load(); },
+        () => { s.offset += s.limit; load(); }));
+    } catch (e) {
+      clear(list);
+      list.appendChild(el("div", { class: "empty", text: "Error: " + e.message }));
+    }
+  }
+  load();
+}
+
+async function openIncidentDetail(id) {
+  const a = await api("/v1/incidents/" + encodeURIComponent(id) +
+    "?tenant_id=" + encodeURIComponent(session.tenant));
+  const tl = (a.timeline || []).map(t => el("div", { class: "row" }, [
+    el("span", { class: "muted", text: fmtTime(t.ts) }),
+    el("span", { text: t.kind }),
+    el("span", { class: "muted", text: t.alert_id || "" }),
+    el("span", { text: t.title || "" })
+  ]));
+  const notes = (a.notes || []).map(n => el("div", { class: "stack" }, [
+    el("div", { class: "muted", style: "font-size:11px",
+      text: fmtTime(n.ts) + " · " + (n.actor || "") }),
+    el("div", { text: n.note })
+  ]));
+  const body = el("div", { class: "stack" }, [
+    el("div", { class: "detail-kv" }, [
+      el("div", { class: "k", text: "Incident" }),
+      el("div", { class: "mono", text: a.incident_id }),
+      el("div", { class: "k", text: "Title" }), el("div", { text: a.title }),
+      el("div", { class: "k", text: "State" }),
+      el("div", {}, [chip(esc(a.state), a.state)]),
+      el("div", { class: "k", text: "Severity" }),
+      el("div", {}, [chip(esc(a.severity), a.severity)]),
+      el("div", { class: "k", text: "Risk" }), el("div", { text: String(a.risk) }),
+      el("div", { class: "k", text: "Assignee" }),
+      el("div", { text: a.assignee || "—" }),
+      el("div", { class: "k", text: "Entities" }),
+      el("div", { class: "mono", text: a.entities }),
+      el("div", { class: "k", text: "Created" }),
+      el("div", { text: fmtTime(a.created_ts) }),
+      el("div", { class: "k", text: "Updated" }),
+      el("div", { text: fmtTime(a.updated_ts) })
+    ]),
+    el("h2", { text: "Timeline" }),
+    el("div", { class: "stack" },
+      tl.length ? tl : [el("div", { class: "empty", text: "No timeline entries." })]),
+    el("h2", { text: "Notes" }),
+    el("div", { class: "stack" },
+      notes.length ? notes : [el("div", { class: "empty", text: "No notes yet." })]),
+    el("div", { class: "row" }, [
+      el("button", { text: "Add note",
+        onclick: () => addIncidentNote(a.incident_id) }),
+      el("button", { text: "Assign",
+        onclick: () => assignIncident(a.incident_id) }),
+      el("button", { text: "Advance state",
+        onclick: () => advanceIncidentState(a.incident_id, a.state) }),
+      el("button", { class: "primary", text: "Open case",
+        onclick: () => openCaseFromIncident(a.incident_id) })
+    ])
+  ]);
+  openModal("Incident " + a.incident_id, body,
+    el("div", { class: "row" },
+      [el("button", { class: "ghost", text: "Close", onclick: closeModal })]));
+}
+
+async function addIncidentNote(id) {
+  const n = prompt("Note text:");
+  if (!n) return;
+  try {
+    await api("/v1/incidents/" + encodeURIComponent(id) + "/note", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: session.tenant, note: n })
+    });
+    toast("Note added", "ok");
+    openIncidentDetail(id);
+  } catch (e) { toast(e.message, "err"); }
+}
+async function assignIncident(id) {
+  const a = prompt("Assign to (username):");
+  if (a === null) return;
+  try {
+    await api("/v1/incidents/" + encodeURIComponent(id) + "/assign", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: session.tenant, assignee: a })
+    });
+    toast("Assigned", "ok");
+    openIncidentDetail(id);
+  } catch (e) { toast(e.message, "err"); }
+}
+async function advanceIncidentState(id, cur) {
+  const order = ["NEW", "TRIAGED", "INVESTIGATING", "CONTAINMENT",
+                 "ERADICATION", "RECOVERY", "CLOSED"];
+  const next = order[Math.min(order.indexOf(cur) + 1, order.length - 1)];
+  if (next === cur) { toast("Already at terminal state"); return; }
+  try {
+    await api("/v1/incidents/" + encodeURIComponent(id) + "/transition", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: session.tenant, to: next })
+    });
+    toast("State → " + next, "ok");
+    openIncidentDetail(id);
+  } catch (e) { toast(e.message, "err"); }
+}
+async function openCaseFromIncident(id) {
+  const t = prompt("Case title:", "Case for " + id);
+  if (!t) return;
+  try {
+    const r = await api("/v1/cases", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: session.tenant, incident_id: id, title: t })
+    });
+    toast("Case " + r.case_id + " opened", "ok");
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/* ============================================================
+   Cases
+   ============================================================ */
+async function renderCases(main) {
+  const wrap = el("div", { class: "stack" }, [
+    el("div", { class: "row between" }, [
+      el("h1", { text: "Cases" }),
+      el("button", { class: "primary", text: "New case", onclick: newCase })
+    ]),
+    el("div", { class: "panel", id: "casesPanel" })
+  ]);
+  clear(main);
+  main.appendChild(wrap);
+  await loadCases();
+}
+async function loadCases() {
+  const p = $("#casesPanel");
+  if (!p) return;
+  p.innerHTML = "";
+  p.appendChild(el("div", { class: "empty" },
+    [el("span", { class: "spinner" }), " Loading…"]));
+  try {
+    const d = await api("/v1/cases?tenant_id=" + encodeURIComponent(session.tenant));
+    clear(p);
+    const rows = d.cases || [];
+    if (!rows.length) {
+      p.appendChild(el("div", { class: "empty", text: "No cases yet." }));
+      return;
+    }
+    p.appendChild(tableOrEmpty(rows, [
+      { k: "case_id", l: "Case" },
+      { k: "title",   l: "Title" },
+      { k: "state",   l: "State" },
+      { k: "incident_id", l: "Incident" },
+      { k: "created_ts", l: "Opened", f: fmtTime }
+    ], r => addCaseNote(r.case_id)));
+  } catch (e) {
+    clear(p);
+    p.appendChild(el("div", { class: "empty", text: "Error: " + e.message }));
+  }
+}
+async function newCase() {
+  const t = prompt("Case title:");
+  if (!t) return;
+  const inc = prompt("Link to incident id (optional):") || null;
+  try {
+    await api("/v1/cases", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: session.tenant, title: t, incident_id: inc })
+    });
+    toast("Case created", "ok");
+    loadCases();
+  } catch (e) { toast(e.message, "err"); }
+}
+async function addCaseNote(id) {
+  const n = prompt("Add note (blank to close):");
+  if (!n) return;
+  try {
+    await api("/v1/cases/" + encodeURIComponent(id) + "/note", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: session.tenant, note: n })
+    });
+    toast("Note added", "ok");
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/* ============================================================
+   Events
+   ============================================================ */
+async function renderEvents(main) {
+  const s = { q: "", limit: 50, offset: 0 };
+  const wrap = el("div", { class: "stack" }, [ el("h1", { text: "Events" }) ]);
+  const filters = el("div", { class: "filters" });
+  filters.appendChild(filterInput("Search source/actor/host",
+    v => { s.q = v; s.offset = 0; load(); }));
+  const list = el("div", { class: "panel" });
+  const pagerBox = el("div");
+  wrap.appendChild(el("div", { class: "row between" },
+    [filters, el("button", { text: "Refresh", onclick: () => load() })]));
+  wrap.appendChild(list);
+  wrap.appendChild(pagerBox);
+  clear(main);
+  main.appendChild(wrap);
+
+  async function load() {
+    list.innerHTML = "";
+    list.appendChild(el("div", { class: "empty" },
+      [el("span", { class: "spinner" }), " Loading…"]));
+    try {
+      const q = new URLSearchParams({
+        tenant_id: session.tenant,
+        limit: String(s.limit), offset: String(s.offset)
+      });
+      if (s.q) q.set("q", s.q);
+      const d = await api("/v1/events?" + q.toString());
+      const rows = d.events || [];
+      clear(list);
+      if (!rows.length)
+        list.appendChild(el("div", { class: "empty", text: "No events match." }));
+      else
+        list.appendChild(tableOrEmpty(rows, [
+          { k: "event_ts", l: "When",   f: fmtTime },
+          { k: "source",   l: "Source" },
+          { k: "kind",     l: "Kind" },
+          { k: "actor",    l: "Actor" },
+          { k: "host",     l: "Host" },
+          { k: "src_ip",   l: "Src" }
+        ], r => {
+          const b = el("pre", { class: "json",
+            text: JSON.stringify(r.normalized || r, null, 2) });
+          openModal("Event " + r.event_id, b,
+            el("div", { class: "row" },
+              [el("button", { class: "ghost", text: "Close", onclick: closeModal })]));
+        }));
+      clear(pagerBox);
+      pagerBox.appendChild(pager(s.offset, s.limit, rows.length,
+        () => { s.offset = Math.max(0, s.offset - s.limit); load(); },
+        () => { s.offset += s.limit; load(); }));
+    } catch (e) {
+      clear(list);
+      list.appendChild(el("div", { class: "empty", text: "Error: " + e.message }));
+    }
+  }
+  load();
+}
+
+/* ============================================================
+   Entities (UEBA)
+   ============================================================ */
+async function renderEntities(main) {
+  const wrap = el("div", { class: "stack" }, [
+    el("h1", { text: "Entities (UEBA state)" }),
+    el("div", { class: "panel", id: "entPanel" })
+  ]);
+  clear(main);
+  main.appendChild(wrap);
+  const p = $("#entPanel");
+  try {
+    const d = await api("/v1/entities?tenant_id=" + encodeURIComponent(session.tenant));
+    clear(p);
+    const rows = d.entities || [];
+    if (!rows.length)
+      p.appendChild(el("div", { class: "empty",
+        text: "No entity state recorded yet. Send events to populate baselines." }));
+    else
+      p.appendChild(tableOrEmpty(rows, [
+        { k: "entity", l: "Entity" },
+        { k: "state",  l: "State", f: v => chip(esc(v), v) },
+        { k: "risk",   l: "Risk" },
+        { k: "updated_ts", l: "Updated", f: fmtTime }
+      ]));
+  } catch (e) {
+    clear(p);
+    p.appendChild(el("div", { class: "empty", text: "Error: " + e.message }));
+  }
+}
+
+/* ============================================================
+   IOCs
+   ============================================================ */
+async function renderIOCs(main) {
+  const s = { q: "", ioc_type: "", limit: 50, offset: 0 };
+  const wrap = el("div", { class: "stack" }, [
+    el("div", { class: "row between" }, [
+      el("h1", { text: "IOC Intelligence" }),
+      el("button", { class: "primary", text: "Add IOC", onclick: newIOC })
+    ])
+  ]);
+  const filters = el("div", { class: "filters" });
+  filters.appendChild(filterInput("Search value",
+    v => { s.q = v; s.offset = 0; load(); }));
+  filters.appendChild(filterSelect("Type", ["", "ipv4", "domain", "sha256", "url"],
+    v => { s.ioc_type = v; s.offset = 0; load(); }));
+  const list = el("div", { class: "panel" });
+  const pagerBox = el("div");
+  wrap.appendChild(filters);
+  wrap.appendChild(list);
+  wrap.appendChild(pagerBox);
+  clear(main);
+  main.appendChild(wrap);
+
+  async function load() {
+    list.innerHTML = "";
+    list.appendChild(el("div", { class: "empty" },
+      [el("span", { class: "spinner" }), " Loading…"]));
+    try {
+      const q = new URLSearchParams({
+        tenant_id: session.tenant,
+        limit: String(s.limit), offset: String(s.offset)
+      });
+      if (s.q) q.set("q", s.q);
+      if (s.ioc_type) q.set("ioc_type", s.ioc_type);
+      const d = await api("/v1/iocs?" + q.toString());
+      const rows = d.iocs || [];
+      clear(list);
+      if (!rows.length)
+        list.appendChild(el("div", { class: "empty", text: "No IOCs match." }));
+      else
+        list.appendChild(tableOrEmpty(rows, [
+          { k: "ioc_type", l: "Type" },
+          { k: "value",    l: "Value" },
+          { k: "source",   l: "Source" },
+          { k: "confidence", l: "Conf" },
+          { k: "severity", l: "Sev", f: v => chip(esc(v), v) },
+          { k: "created_ts", l: "Created", f: fmtTime }
+        ], r => openIOCDetail(r)));
+      clear(pagerBox);
+      pagerBox.appendChild(pager(s.offset, s.limit, rows.length,
+        () => { s.offset = Math.max(0, s.offset - s.limit); load(); },
+        () => { s.offset += s.limit; load(); }));
+    } catch (e) {
+      clear(list);
+      list.appendChild(el("div", { class: "empty", text: "Error: " + e.message }));
+    }
+  }
+  load();
+  window._loadIOCs = load;
+}
+async function newIOC() {
+  const t = prompt("Type (ipv4/domain/sha256/url):", "ipv4");
+  if (!t) return;
+  const v = prompt("Value:");
+  if (!v) return;
+  const sev = prompt("Severity (info/low/medium/high/critical):", "medium") || "medium";
+  try {
+    await api("/v1/iocs", {
+      method: "POST",
+      body: JSON.stringify({
+        tenant_id: session.tenant, ioc_type: t, value: v,
+        severity: sev, source: "ui"
+      })
+    });
+    toast("IOC added", "ok");
+    if (window._loadIOCs) window._loadIOCs();
+  } catch (e) { toast(e.message, "err"); }
+}
+async function openIOCDetail(row) {
+  const body = el("div", { class: "stack" }, [
+    el("div", { class: "detail-kv" }, [
+      el("div", { class: "k", text: "ID" }),
+      el("div", { class: "mono", text: row.ioc_id }),
+      el("div", { class: "k", text: "Type" }), el("div", { text: row.ioc_type }),
+      el("div", { class: "k", text: "Value" }),
+      el("div", { class: "mono", text: row.value }),
+      el("div", { class: "k", text: "Source" }), el("div", { text: row.source }),
+      el("div", { class: "k", text: "Confidence" }),
+      el("div", { text: String(row.confidence) }),
+      el("div", { class: "k", text: "Severity" }),
+      el("div", {}, [chip(esc(row.severity), row.severity)]),
+      el("div", { class: "k", text: "Expires" }),
+      el("div", { text: row.expires_ts || "—" })
+    ]),
+    el("div", { class: "row" }, [
+      el("button", { class: "danger", text: "Delete IOC",
+        onclick: () => deleteIOC(row.ioc_id) })
+    ])
+  ]);
+  openModal("IOC " + row.value, body,
+    el("div", { class: "row" },
+      [el("button", { class: "ghost", text: "Close", onclick: closeModal })]));
+}
+async function deleteIOC(id) {
+  if (!confirm("Delete this IOC?")) return;
+  try {
+    await api("/v1/iocs/" + encodeURIComponent(id) +
+      "?tenant_id=" + encodeURIComponent(session.tenant), { method: "DELETE" });
+    toast("IOC deleted", "ok");
+    closeModal();
+    if (window._loadIOCs) window._loadIOCs();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/* ============================================================
+   Detection Rules
+   ============================================================ */
+async function renderDetections(main) {
+  const wrap = el("div", { class: "stack" }, [
+    el("h1", { text: "Detection Rules" }),
+    el("div", { class: "panel", id: "detPanel" })
+  ]);
+  clear(main);
+  main.appendChild(wrap);
+  try {
+    const d = await api("/v1/detections");
+    const p = $("#detPanel");
+    clear(p);
+    const rows = d.detections || [];
+    if (!rows.length)
+      p.appendChild(el("div", { class: "empty", text: "No rules registered." }));
+    else
+      p.appendChild(tableOrEmpty(rows, [
+        { k: "rule_id",   l: "Rule ID" },
+        { k: "title",     l: "Title" },
+        { k: "severity",  l: "Severity", f: v => chip(esc(v), v) },
+        { k: "tags",      l: "Tags",
+          f: v => el("span", { class: "mono", text: (v || []).join(", ") }) },
+        { k: "description", l: "Description" }
+      ]));
+  } catch (e) {
+    $("#detPanel").appendChild(
+      el("div", { class: "empty", text: "Error: " + e.message }));
+  }
+}
+
+/* ============================================================
+   Threat Hunting (uses existing /v1/events)
+   ============================================================ */
+async function renderHunting(main) {
+  const wrap = el("div", { class: "stack" }, [
+    el("h1", { text: "Threat Hunting" }),
+    el("p", { class: "muted",
+      text: "Search normalized events by free-text. Queries are parameterized " +
+            "and read-only — no SQL is executed from this page." }),
+    el("div", { class: "panel" })
+  ]);
+  const panel = wrap.lastChild;
+  const input = el("input", { placeholder: "e.g. 10.0.0.1, mimikatz, admin" });
+  const result = el("div", { class: "stack" });
+  panel.appendChild(el("div", { class: "stack" }, [
+    el("label", { text: "Search events" }),
+    input,
+    el("div", { class: "row" }, [
+      el("button", { class: "primary", text: "Run", onclick: run }),
+      el("span", { class: "muted", text: "Max 200 results" })
+    ])
+  ]));
+  panel.appendChild(result);
+  clear(main);
+  main.appendChild(wrap);
+
+  async function run() {
+    const q = input.value.trim();
+    clear(result);
+    result.appendChild(el("div", { class: "empty" },
+      [el("span", { class: "spinner" }), " Searching…"]));
+    try {
+      const params = new URLSearchParams({
+        tenant_id: session.tenant, limit: "200", offset: "0"
+      });
+      if (q) params.set("q", q);
+      const d = await api("/v1/events?" + params.toString());
+      const rows = d.events || [];
+      clear(result);
+      if (!rows.length) {
+        result.appendChild(el("div", { class: "empty",
+          text: "No matching events." }));
+        return;
+      }
+      result.appendChild(tableOrEmpty(rows, [
+        { k: "event_ts", l: "When",   f: fmtTime },
+        { k: "source",   l: "Source" },
+        { k: "kind",     l: "Kind" },
+        { k: "actor",    l: "Actor" },
+        { k: "host",     l: "Host" },
+        { k: "src_ip",   l: "Src" }
+      ], r => {
+        const b = el("pre", { class: "json",
+          text: JSON.stringify(r.normalized || r, null, 2) });
+        openModal("Event " + r.event_id, b,
+          el("div", { class: "row" },
+            [el("button", { class: "ghost", text: "Close", onclick: closeModal })]));
+      }));
+    } catch (e) {
+      clear(result);
+      result.appendChild(el("div", { class: "empty", text: "Error: " + e.message }));
+    }
+  }
+}
+
+/* ============================================================
+   SOAR
+   ============================================================ */
+async function renderSOAR(main) {
+  const wrap = el("div", { class: "stack" }, [
+    el("div", { class: "row between" }, [
+      el("h1", { text: "SOAR Response Actions" }),
+      el("div", { class: "row" }, [
+        el("button", { class: "danger", text: "Engage kill switch",
+          onclick: () => ks(true) }),
+        el("button", { text: "Disengage", onclick: () => ks(false) }),
+        el("button", { class: "primary", text: "Propose action",
+          onclick: proposeSOAR })
+      ])
+    ]),
+    el("div", { class: "panel", id: "soarPanel" })
+  ]);
+  clear(main);
+  main.appendChild(wrap);
+  await loadSOAR();
+}
+async function loadSOAR() {
+  const p = $("#soarPanel");
+  p.innerHTML = "";
+  p.appendChild(el("div", { class: "empty" },
+    [el("span", { class: "spinner" }), " Loading…"]));
+  try {
+    const d = await api("/v1/response_actions?tenant_id=" +
+      encodeURIComponent(session.tenant));
+    clear(p);
+    const rows = d.actions || [];
+    if (!rows.length)
+      p.appendChild(el("div", { class: "empty", text: "No response actions yet." }));
+    else
+      p.appendChild(tableOrEmpty(rows, [
+        { k: "action_type",  l: "Action" },
+        { k: "state",        l: "State", f: v => chip(esc(v), v) },
+        { k: "requested_by", l: "Requested by" },
+        { k: "approved_by",  l: "Approved by" },
+        { k: "created_ts",   l: "Created", f: fmtTime }
+      ], r => openSOARAction(r)));
+  } catch (e) {
+    clear(p);
+    p.appendChild(el("div", { class: "empty", text: "Error: " + e.message }));
+  }
+}
+async function ks(engage) {
+  try {
+    await api("/v1/soar/killswitch", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: session.tenant, engage: engage })
+    });
+    toast("Kill switch " + (engage ? "engaged" : "disengaged"), "ok");
+  } catch (e) { toast(e.message, "err"); }
+}
+async function proposeSOAR() {
+  const at = prompt("Action (isolate_endpoint/revoke_session/block_ioc/notify_analyst):",
+    "notify_analyst");
+  if (!at) return;
+  const p = {};
+  if (at === "notify_analyst") p.message = prompt("Message:") || "";
+  else if (at === "isolate_endpoint") p.host = prompt("Host:") || "";
+  else if (at === "revoke_session") p.jti = prompt("Session jti:") || "";
+  else if (at === "block_ioc") p.value = prompt("IOC value:") || "";
+  try {
+    const r = await api("/v1/soar/propose", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: session.tenant, action_type: at, params: p })
+    });
+    toast("Proposed: " + r.action_id, "ok");
+    loadSOAR();
+  } catch (e) { toast(e.message, "err"); }
+}
+async function openSOARAction(row) {
+  const body = el("div", { class: "stack" }, [
+    el("div", { class: "detail-kv" }, [
+      el("div", { class: "k", text: "Action" }), el("div", { text: row.action_type }),
+      el("div", { class: "k", text: "State" }),
+      el("div", {}, [chip(esc(row.state), row.state)]),
+      el("div", { class: "k", text: "Requested by" }),
+      el("div", { text: row.requested_by }),
+      el("div", { class: "k", text: "Approved by" }),
+      el("div", { text: row.approved_by || "—" })
+    ]),
+    el("div", { class: "row" }, [
+      el("button", { text: "Approve",
+        onclick: () => approveSOAR(row.action_id) }),
+      el("button", { text: "Execute (dry run)",
+        onclick: () => execSOAR(row.action_id, true) }),
+      el("button", { class: "primary", text: "Execute",
+        onclick: () => execSOAR(row.action_id, false) }),
+      el("button", { text: "Rollback",
+        onclick: () => rbSOAR(row.action_id) })
+    ])
+  ]);
+  openModal("SOAR Action " + row.action_id, body,
+    el("div", { class: "row" },
+      [el("button", { class: "ghost", text: "Close", onclick: closeModal })]));
+}
+async function approveSOAR(id) {
+  try {
+    await api("/v1/soar/approve", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: session.tenant, action_id: id })
+    });
+    toast("Approved", "ok");
+    closeModal();
+    loadSOAR();
+  } catch (e) { toast(e.message, "err"); }
+}
+async function execSOAR(id, dry) {
+  try {
+    const r = await api("/v1/soar/execute", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: session.tenant, action_id: id, dry_run: dry })
+    });
+    toast("Executed" + (dry ? " (dry run)" : "") + ": " + JSON.stringify(r), "ok");
+    closeModal();
+    loadSOAR();
+  } catch (e) { toast(e.message, "err"); }
+}
+async function rbSOAR(id) {
+  try {
+    await api("/v1/soar/rollback", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: session.tenant, action_id: id })
+    });
+    toast("Rollback requested", "ok");
+    closeModal();
+    loadSOAR();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/* ============================================================
+   AI Assistant
+   ============================================================ */
+async function renderAI(main) {
+  const wrap = el("div", { class: "stack" }, [
+    el("h1", { text: "AI Assistant (L1–L5)" }),
+    el("p", { class: "muted",
+      text: "These endpoints return rule/statistical output unless an LLM " +
+            "provider is configured. They never execute actions." }),
+    el("div", { class: "panel stack" }, [
+      aiForm("L1 Triage", "/v1/ai/l1", [{ k: "alert_id", l: "Alert ID" }]),
+      aiForm("L2 Investigation", "/v1/ai/l2",
+        [{ k: "incident_id", l: "Incident ID" }]),
+      aiForm("L3 Hunt", "/v1/ai/l3", [{ k: "hypothesis", l: "Hypothesis" }]),
+      aiForm("L4 Detection Engineering", "/v1/ai/l4",
+        [{ k: "description", l: "Rule description" }]),
+      aiForm("L5 Response Reasoning", "/v1/ai/l5", [
+        { k: "incident_id", l: "Incident ID" },
+        { k: "proposed_action", l: "Proposed action (optional)" }
+      ])
+    ])
+  ]);
+  clear(main);
+  main.appendChild(wrap);
+}
+function aiForm(title, path, fields) {
+  const inputs = {};
+  const f = el("div", { class: "stack" }, [
+    el("h3", { text: title }),
+    el("div", { class: "filters" }, fields.map(x => {
+      const i = el("input", { placeholder: "" });
+      inputs[x.k] = i;
+      return el("div", {}, [el("label", { text: x.l }), i]);
+    })),
+    el("div", { class: "row" }, [
+      el("button", { class: "primary", text: "Run",
+        onclick: async () => {
+          const pl = { tenant_id: session.tenant };
+          for (const x of fields) {
+            if (inputs[x.k].value.trim()) pl[x.k] = inputs[x.k].value.trim();
+          }
+          try {
+            const r = await api(path, { method: "POST", body: JSON.stringify(pl) });
+            const o = el("pre", { class: "json", text: JSON.stringify(r, null, 2) });
+            openModal(title, o,
+              el("div", { class: "row" },
+                [el("button", { class: "ghost", text: "Close", onclick: closeModal })]));
+          } catch (e) { toast(e.message, "err"); }
+        } })
+    ])
+  ]);
+  return el("div", { class: "panel" }, [f]);
+}
+
+/* ============================================================
+   Audit Log
+   ============================================================ */
+async function renderAudit(main) {
+  const wrap = el("div", { class: "stack" }, [
+    el("h1", { text: "Audit Log" }),
+    el("div", { class: "panel", id: "audPanel" })
+  ]);
+  clear(main);
+  main.appendChild(wrap);
+  const p = $("#audPanel");
+  try {
+    const [d, v] = await Promise.all([
+      api("/v1/audit?tenant_id=" + encodeURIComponent(session.tenant)),
+      api("/v1/audit/verify?tenant_id=" + encodeURIComponent(session.tenant))
+    ]);
+    clear(p);
+    p.appendChild(el("div", { class: "row between" }, [
+      el("div", { class: "muted",
+        text: "Chain integrity: " +
+              (v.ok ? "OK" : "BROKEN at seq " + v.first_bad_seq) })
+    ]));
+    const rows = d.entries || [];
+    if (!rows.length)
+      p.appendChild(el("div", { class: "empty", text: "No audit entries yet." }));
+    else
+      p.appendChild(tableOrEmpty(rows, [
+        { k: "ts",     l: "When", f: fmtTime },
+        { k: "actor",  l: "Actor" },
+        { k: "action", l: "Action" },
+        { k: "target", l: "Target" },
+        { k: "result", l: "Result" }
+      ]));
+  } catch (e) {
+    clear(p);
+    p.appendChild(el("div", { class: "empty", text: "Error: " + e.message }));
+  }
+}
+
+/* ============================================================
+   Users
+   ============================================================ */
+async function renderUsers(main) {
+  const wrap = el("div", { class: "stack" }, [
+    el("h1", { text: "Users" }),
+    el("div", { class: "panel", id: "usrPanel" })
+  ]);
+  clear(main);
+  main.appendChild(wrap);
+  const p = $("#usrPanel");
+  try {
+    const d = await api("/v1/users?tenant_id=" + encodeURIComponent(session.tenant));
+    clear(p);
+    const rows = d.users || [];
+    if (!rows.length)
+      p.appendChild(el("div", { class: "empty", text: "No users visible." }));
+    else
+      p.appendChild(tableOrEmpty(rows, [
+        { k: "username",    l: "Username" },
+        { k: "role",        l: "Role" },
+        { k: "mfa_enabled", l: "MFA", f: v => v ? "enabled" : "disabled" },
+        { k: "created_ts",  l: "Created", f: fmtTime }
+      ]));
+  } catch (e) {
+    clear(p);
+    p.appendChild(el("div", { class: "empty", text: "Not available: " + e.message }));
+  }
+}
+
+/* ============================================================
+   System Health / Metrics
+   ============================================================ */
+async function renderSettings(main) {
+  const wrap = el("div", { class: "stack" }, [
+    el("h1", { text: "System Health" })
+  ]);
+  clear(main);
+  main.appendChild(wrap);
+  try {
+    const [h, m] = await Promise.all([
+      api("/v1/health"),
+      api("/metrics")
+    ]);
+    wrap.appendChild(el("div", { class: "panel stack" }, [
+      el("h2", { text: "Readiness" }),
+      el("div", { class: "detail-kv" },
+        Object.entries(h.checks || {}).flatMap(([k, v]) => [
+          el("div", { class: "k", text: k }),
+          el("div", { text: String(v) })
+        ])),
+      el("h2", { text: "Counters" }),
+      el("pre", { class: "json", text: JSON.stringify(m.counters || {}, null, 2) }),
+      el("h2", { text: "Gauges" }),
+      el("pre", { class: "json", text: JSON.stringify(m.gauges || {}, null, 2) })
+    ]));
+  } catch (e) {
+    wrap.appendChild(el("div", { class: "empty", text: "Error: " + e.message }));
+  }
+}
+
+/* ============================================================
+   Bootstrap
+   ============================================================ */
+function init() {
+  $("#loginForm").addEventListener("submit", doLogin);
+  $("#pwToggle").addEventListener("click", () => {
+    const p = $("#liPass");
+    const show = p.type === "password";
+    p.type = show ? "text" : "password";
+    $("#pwToggle").textContent = show ? "HIDE" : "SHOW";
+    $("#pwToggle").setAttribute("aria-label",
+      show ? "Hide password" : "Show password");
+  });
+  $("#btnLogout").addEventListener("click", async () => {
+    try { await api("/v1/auth/logout", { method: "POST", body: JSON.stringify({}) }); }
+    catch (e) {}
+    session.clear();
+    showLogin();
+  });
+  $("#btnChangePw").addEventListener("click", () => openPasswordModal(false));
+  $("#modalClose").addEventListener("click", () => {
+    if (_pwModalOpen) return;
+    closeModal();
+  });
+  $("#modalBackdrop").addEventListener("click", (ev) => {
+    if (ev.target === $("#modalBackdrop") && !_pwModalOpen) closeModal();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !_pwModalOpen) closeModal();
+  });
+  fetch("/v1/version").then(r => r.json()).then(d => {
+    $("#loginVer").textContent = "v" + (d.version || "?");
+  }).catch(() => {});
+
+  if (session.load()) {
+    api("/v1/me").then(() => showApp()).catch(() => {
+      session.clear();
+      showLogin();
+    });
+  } else {
+    showLogin();
+  }
+}
+document.addEventListener("DOMContentLoaded", init);
+</script>
+</body>
+</html>

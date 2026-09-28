@@ -1,0 +1,19 @@
+id: AUTH-BF-SUCCESS-001
+title: Brute-force followed by successful login
+description: >
+  Five or more failed authentication attempts for the same actor within
+  300 seconds, immediately followed by a successful login for that
+  actor. Detects a successful credential brute-force attempt.
+severity: high
+enabled: true
+version: 2
+tags: [auth, brute_force]
+mitre:
+  techniques: [T1110]
+stateful:
+  kind: auth
+  window_seconds: 300
+  threshold: 5
+  result_field: result
+  result_equals: fail
+  then_result_equals: success

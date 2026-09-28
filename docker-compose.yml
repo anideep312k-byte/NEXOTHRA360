@@ -1,0 +1,51 @@
+services:
+  app:
+    build: { context: ., dockerfile: Dockerfile }
+    container_name: kavach360_api
+    restart: unless-stopped
+    ports: ["127.0.0.1:8080:8080"]
+    env_file: [.env]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  enrichment_worker:
+    build: { context: ., dockerfile: Dockerfile }
+    container_name: kavach360_enrichment
+    restart: unless-stopped
+    entrypoint: ["/sbin/tini","--","python","-m","kavach360.enrichment.worker"]
+    env_file: [.env]
+    depends_on:
+      redis: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: kavach360_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kavach}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_DB: ${POSTGRES_DB:-kavach360}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kavach} -d ${POSTGRES_DB:-kavach360}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: kavach360_cache
+    restart: unless-stopped
+    command: ["redis-server","--appendonly","yes","--appendfsync","everysec"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD","redis-cli","ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:

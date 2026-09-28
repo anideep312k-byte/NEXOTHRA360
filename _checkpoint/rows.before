@@ -1,0 +1,16 @@
+events                         0
+alerts                         0
+incidents                      0
+cases                          0
+incident_alerts                0
+incident_timeline              0
+incident_entity_index          0
+entity_state                   0
+baselines                      0
+response_actions               0
+iocs                           0
+users                          1
+sessions                       2
+audit                          392
+dlq                            0
+bus                            0

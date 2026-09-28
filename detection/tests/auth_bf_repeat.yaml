@@ -1,0 +1,27 @@
+rule_id: AUTH-BF-REPEAT-002
+cases:
+  - name: ten_fails_fire
+    events:
+      - {kind: auth, tenant_id: t1, actor: u4, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u4, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u4, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u4, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u4, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u4, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u4, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u4, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u4, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u4, result: fail}
+    expect_fire_on_last: true
+  - name: nine_fails_do_not_fire
+    events:
+      - {kind: auth, tenant_id: t1, actor: u5, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u5, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u5, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u5, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u5, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u5, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u5, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u5, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u5, result: fail}
+    expect_fire_on_last: false

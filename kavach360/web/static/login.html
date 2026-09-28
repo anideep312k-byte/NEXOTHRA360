@@ -1,0 +1,38 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kavach360 — Login</title><link rel="stylesheet" href="/static/style.css"></head><body>
+<div class="login-container"><div class="login-card">
+<h1>Kavach360</h1><p class="subtitle">Enterprise SOC Platform</p>
+<div id="error" class="error-msg" style="display:none;"></div>
+<form id="loginForm">
+<div class="form-group"><label>Email</label><input type="email" id="email" required autocomplete="email" placeholder="analyst@example.com"></div>
+<div class="form-group"><label>Password</label><input type="password" id="password" required autocomplete="current-password"></div>
+<button type="submit" class="btn" id="submitBtn">Sign In</button></form>
+<p style="text-align:center;margin-top:24px;font-size:13px;color:var(--text-dim);">No account? <a href="#" onclick="registerDemo();return false;">Create demo account</a></p>
+</div></div><script>
+async function getCsrf(){const r=await fetch('/api/v1/auth/csrf',{credentials:'same-origin'});return (await r.json()).csrf_token;}
+function showError(m){const e=document.getElementById('error');e.textContent=m;e.style.display='block';}
+async function registerDemo(){
+  const email=prompt('Email:','analyst@example.com');if(!email)return;
+  const password=prompt('Password (min 12 chars):','Str0ng!Passw0rd#2024');if(!password)return;
+  try{const csrf=await getCsrf();
+    const r=await fetch('/api/v1/auth/register',{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrf},
+      body:JSON.stringify({email,password})});
+    const d=await r.json();
+    if(r.ok)alert('Account created. Sign in to continue.');
+    else alert('Registration failed: '+(d.error||'Unknown'));
+  }catch(e){alert('Error: '+e.message);}}
+document.getElementById('loginForm').addEventListener('submit',async(e)=>{
+  e.preventDefault();const btn=document.getElementById('submitBtn');btn.disabled=true;btn.textContent='Signing in...';
+  try{const csrf=await getCsrf();
+    const r=await fetch('/api/v1/auth/login',{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrf},
+      body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value})});
+    const d=await r.json();
+    if(r.ok&&d.authenticated)window.location.href='/static/dashboard.html';
+    else if(d.mfa_required)showError('MFA required. Please use the API client.');
+    else showError(d.message||d.error||'Login failed');
+  }catch(e){showError('Error: '+e.message);}
+  finally{btn.disabled=false;btn.textContent='Sign In';}});
+</script></body></html>

@@ -1,0 +1,14 @@
+id: BENIGN-ADMIN-001
+title: Benign administrative read
+description: >
+  Successful administrative read. Informational only; used to baseline
+  normal activity rather than to alert.
+severity: info
+enabled: true
+version: 1
+tags: [benign, baseline]
+mitre: {}
+match:
+  kind: authz
+  field: action
+  equals: read

@@ -1,0 +1,15 @@
+id: NET-EXFIL-001
+title: Large outbound transfer
+description: >
+  Single event reports more than 50 MB of outbound traffic from a
+  host. Often an indicator of data exfiltration.
+severity: high
+enabled: true
+version: 1
+tags: [network, exfiltration]
+mitre:
+  techniques: [T1041, T1048]
+match:
+  kind: net
+  numeric_field: bytes_out
+  numeric_gt: 50000000

@@ -1,0 +1,32 @@
+# Rule tests for AUTH-BF-SUCCESS-001.
+# Each entry: a sequence of events, and the rule_id that should fire
+# by the end of the sequence. Used by the rule test framework to
+# confirm the rule behaves as documented.
+rule_id: AUTH-BF-SUCCESS-001
+cases:
+  - name: five_fails_then_success_fires
+    events:
+      - {kind: auth, tenant_id: t1, actor: u1, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u1, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u1, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u1, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u1, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u1, result: success}
+    expect_fire_on_last: true
+  - name: four_fails_then_success_does_not_fire
+    events:
+      - {kind: auth, tenant_id: t1, actor: u2, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u2, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u2, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u2, result: fail}
+      - {kind: auth, tenant_id: t1, actor: u2, result: success}
+    expect_fire_on_last: false
+  - name: tenant_isolation
+    events:
+      - {kind: auth, tenant_id: tA, actor: u3, result: fail}
+      - {kind: auth, tenant_id: tA, actor: u3, result: fail}
+      - {kind: auth, tenant_id: tA, actor: u3, result: fail}
+      - {kind: auth, tenant_id: tA, actor: u3, result: fail}
+      - {kind: auth, tenant_id: tB, actor: u3, result: fail}
+      - {kind: auth, tenant_id: tB, actor: u3, result: success}
+    expect_fire_on_last: false

@@ -1,0 +1,17 @@
+id: AUTH-BF-REPEAT-002
+title: Repeated authentication failures
+description: >
+  Ten or more failed authentication attempts for the same actor within
+  120 seconds. Indicators of brute force or password spraying.
+severity: medium
+enabled: true
+version: 2
+tags: [auth, brute_force]
+mitre:
+  techniques: [T1110]
+stateful:
+  kind: auth
+  window_seconds: 120
+  threshold: 10
+  result_field: result
+  result_equals: fail

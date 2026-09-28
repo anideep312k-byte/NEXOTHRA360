@@ -1,0 +1,16 @@
+TACTICS = {
+    "TA0043": {"name": "Reconnaissance", "short": "recon"},
+    "TA0042": {"name": "Resource Development", "short": "resource-dev"},
+    "TA0001": {"name": "Initial Access", "short": "initial-access"},
+    "TA0002": {"name": "Execution", "short": "execution"},
+    "TA0003": {"name": "Persistence", "short": "persistence"},
+    "TA0004": {"name": "Privilege Escalation", "short": "priv-esc"},
+    "TA0005": {"name": "Defense Evasion", "short": "defense-evasion"},
+    "TA0006": {"name": "Credential Access", "short": "credential-access"},
+    "TA0007": {"name": "Discovery", "short": "discovery"},
+    "TA0008": {"name": "Lateral Movement", "short": "lateral-movement"},
+    "TA0009": {"name": "Collection", "short": "collection"},
+    "TA0011": {"name": "Command and Control", "short": "c2"},
+    "TA0010": {"name": "Exfiltration", "short": "exfiltration"},
+    "TA0040": {"name": "Impact", "short": "impact"},
+}

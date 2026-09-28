@@ -1,0 +1,46 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kavach360 — Submit Event</title><link rel="stylesheet" href="/static/style.css"></head><body>
+<div class="header"><div class="logo">Kavach360</div>
+<nav class="nav"><a href="/static/dashboard.html">Dashboard</a>
+<a href="/static/events.html" class="active">Submit Event</a>
+<a href="#" onclick="logout();return false;">Logout</a></nav></div>
+<div class="main"><div class="page-title"><h2>Submit Security Event</h2></div>
+<div class="card"><h3>Event JSON Payload</h3>
+<div class="form-group"><label>Quick Templates</label>
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+<button class="btn btn-sm" onclick="loadTemplate('powershell')">PowerShell</button>
+<button class="btn btn-sm" onclick="loadTemplate('mimikatz')">Mimikatz</button>
+<button class="btn btn-sm" onclick="loadTemplate('sqli')">SQLi</button>
+<button class="btn btn-sm" onclick="loadTemplate('xss')">XSS</button>
+<button class="btn btn-sm" onclick="loadTemplate('cloudroot')">Cloud Root</button>
+<button class="btn btn-sm" onclick="loadTemplate('traversal')">Traversal</button>
+</div></div>
+<textarea id="payload"></textarea>
+<div style="margin-top:16px;"><button class="btn btn-sm" onclick="submitEvent()">Submit Event</button></div></div>
+<div class="card" id="resultCard" style="display:none;"><h3>Detections Fired</h3><div id="result"></div></div>
+</div><script>
+const templates={
+  powershell:{source_type:"endpoint",action:"process_start",process:"powershell.exe -enc ZQB2AGkAbAA=",src_ip:"1.2.3.4",user:"admin",host:"corp-laptop-01"},
+  mimikatz:{source_type:"endpoint",action:"process_start",process:"mimikatz.exe",user:"admin",host:"dc-01",message:"mimikatz sekurlsa::logonpasswords"},
+  sqli:{source_type:"web",action:"http_request",url:"/x?q=1 union select 1",src_ip:"5.6.7.8"},
+  xss:{source_type:"web",action:"http_request",url:"/search?q=<img src=x onerror=alert(1)>",src_ip:"9.9.9.9"},
+  cloudroot:{source_type:"cloud",action:"api_call",user:"root",message:"AWS root login"},
+  traversal:{source_type:"web",action:"http_request",url:"/download?file=../../etc/passwd",src_ip:"5.6.7.8"}};
+function loadTemplate(n){document.getElementById('payload').value=JSON.stringify(templates[n],null,2);}
+async function getCsrf(){const r=await fetch('/api/v1/auth/csrf',{credentials:'same-origin'});return (await r.json()).csrf_token;}
+async function submitEvent(){const t=document.getElementById('payload').value.trim();
+if(!t){alert('Payload is empty');return;}
+let payload;try{payload=JSON.parse(t);}catch(e){alert('Invalid JSON: '+e.message);return;}
+try{const csrf=await getCsrf();
+const r=await fetch('/api/v1/soc/events',{method:'POST',credentials:'same-origin',
+headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrf},body:JSON.stringify(payload)});
+const d=await r.json();document.getElementById('resultCard').style.display='block';
+if(r.ok){if(d.count===0)document.getElementById('result').innerHTML='<div class="card">Event accepted. No detections (dedup or no match).</div>';
+else document.getElementById('result').innerHTML='<p><strong>'+d.count+' detection(s):</strong></p><table><thead><tr><th>Rule</th><th>Severity</th><th>MITRE</th><th>Risk</th><th>Priority</th></tr></thead><tbody>'+d.detections.map(x=>'<tr><td><code>'+x.rule_id+'</code></td><td><span class="badge '+x.severity+'">'+x.severity+'</span></td><td>'+(x.mitre||[]).join(', ')+'</td><td>'+x.risk_score+'</td><td><strong>'+x.priority+'</strong></td></tr>').join('')+'</tbody></table>';}
+else document.getElementById('result').innerHTML='<div class="error-msg">Error: '+JSON.stringify(d)+'</div>';}catch(e){alert('Error: '+e.message);}}
+async function logout(){const csrf=await getCsrf();
+await fetch('/api/v1/auth/logout',{method:'POST',credentials:'same-origin',headers:{'X-CSRF-TOKEN':csrf}});
+window.location.href='/static/login.html';}
+loadTemplate('powershell');
+</script></body></html>

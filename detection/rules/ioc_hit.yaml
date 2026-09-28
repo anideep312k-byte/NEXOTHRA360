@@ -1,0 +1,16 @@
+id: IOC-HIT-001
+title: Event matched known IOC
+description: >
+  The event contains at least one indicator of compromise (IP, domain,
+  SHA-256, URL) that is present in the tenant's IOC store. This rule
+  depends on the enrichment pipeline's ioc_hits structure, which is
+  not yet expressible in the declarative schema. The built-in Python
+  implementation remains active. The YAML file documents the rule's
+  metadata but is disabled.
+severity: high
+enabled: false
+version: 1
+tags: [ioc]
+mitre: {}
+match:
+  kind: __disabled__

@@ -1,0 +1,15 @@
+id: PROC-SUSP-001
+title: Suspicious process name observed
+description: >
+  Process basename matches a curated list of dual-use tooling names
+  frequently seen in post-exploitation activity (mimikatz, psexec,
+  netcat, nmap, and similar).
+severity: medium
+enabled: true
+version: 1
+tags: [process, dual_use_tooling]
+mitre:
+  techniques: [T1059, T1105]
+match:
+  kind: process
+  regex: "(?i)/(mimikatz|psexec|nc|netcat|nmap|curl|wget)(\\.exe|\\.bin|\\.sh|\\.py|\\.bat|\\.cmd)?$"
